@@ -1,0 +1,557 @@
+---
+title: "Peligros a nivel AGEB"
+author: "Juvenal Campos"
+date: "7/2/2019"
+output: html_document
+---
+
+
+
+
+# Peligros a Nivel AGEB para la Ciudad de México.
+
+El presente trabajo está elaborado en base a los datos de peligro a nivel AGEB que proporciona el Atlas de Riesgos de la Ciudad de México, disponible en este [enlace.](http://atlas.cdmx.gob.mx/datosabiertos.html).
+
+El peligro se define como la "*Probabilidad de ocurrencia de un agente perturbador potencialmente dañino de cierta intensidad, durante un cierto periodo y en un sitio determinado.*". Los siguientes mapas muestran la probabilidad de ocurrencia de un fenómeno en particular, mas no la exposición o la vulnerabilidad de los habitantes a este. 
+
+El presente trabajo muestra el código de R necesario para la obtención de los mapas. 
+
+## 1. Obtención de la información. 
+
+La información de los indicadores AGEB de peligro se obtuvo de la página del Atlas de Riesgos de la Ciudad de México. Los polígonos de municipios y de estados se obtuvieron del SIG de Conabio, previamente procesados por el Autor y disponibles en los enlaces mostrados en el código que se muestra a continuación. Se utiliza el sistema de referencias de coordenadas 4326, el cual permite manejar las localizaciones geográficas de latitud y longitud en grados. 
+
+```{r,message=FALSE, warning=FALSE}
+# Librerias utilizadas
+library(sf)                                 # Leer información geográfica
+library(leaflet)                            # Hacer mapas interactivos
+library(tidyverse)                          # Manejo de Bases de Datos
+niveles <- function(x) levels(as.factor(x)) # Funcion propia para explorar categorias
+source("https://raw.githubusercontent.com/JuveCampos/DataVizRepo/master/R%20-%20leaflet/Mapas_zona_metropolitana/Norte.R")                      # Funcion para incluir rosa de los vientos en los mapas
+
+## Leemos informacion 
+
+# Mapa de indicadores del Atlas de Riesgo de la CDMX
+mapa <- st_read("http://atlas.cdmx.gob.mx/datosAbiertos/INDICADORES_AGEB.geojson", quiet = T) %>% 
+  st_transform(crs = 4326)
+
+# Mapa de municipios de la CDMX
+mapa_municipios <- st_read("https://github.com/JuveCampos/Shapes_Resiliencia_CDMX_CIDE/raw/master/Zona%20Metropolitana/EdosZM.geojson", quiet = T) %>% 
+  filter(CVE_ENT == "09")
+
+# Mapa de la entidad de la Ciudad de México
+mapa_cdmx <- st_read("https://github.com/JuveCampos/Shapes_Resiliencia_CDMX_CIDE/raw/master/Zona%20Metropolitana/EstadosZMVM.geojson", quiet = T)[3,]
+
+```
+
+## 2. Manejo de los datos.
+
+Para realizar los mapas, es necesario realizar el siguiente manejo: 
+
+1. Cambiar el nombre de la entidad de `Distrito Federal` a `Ciudad de México`.
+
+2. Convertir el tipo de la variable `ENTIDAD` de texto a variable categórica. 
+
+3. Cambiar el nombre de las categorías que tengan acento a un nombre que no esté mas escrito. 
+
+Estas modificaciones se realizan en el siguiente código. 
+
+```{r echo = T}
+# Modificamos Base
+mapa$ENTIDAD <- "Ciudad de México"
+mapa$ALCALDIA <- as.factor(mapa$ALCALDIA)
+levels(mapa$ALCALDIA)[c(2, 3, 5, 13, 16)] <- c("Benito Juárez", "Coyoacaán", "Cuauhtémoc", "Tláhuac", "Álvaro Obregón")
+
+# Modificamos base, para quedarnos con factores
+a <- lapply(mapa, class) %>% unlist()
+mapaFactor <- mapa[,a == "factor"]
+```
+
+Una vez hechas estas modificaciones menores, realizamos el cambio de categorías de peligro en las variables de la base que nos dan información del peligro ante fenómenos naturales: estas variables son:  `GRANIZO`, `TOM_ELEC`, `PRECIPITAC`, `INUNDACION`, `TEM_MAX`, `TEM_MIN`, `NEVADA`, `SUS_LADERA`, `VUL_SOCIAL`, `VUL_SOC_FR` y `SISMO`. 
+
+```{r}
+# Funcion para cambiar varias variables a la vez.
+intensidad <- function(a) a <- factor(a, levels = c("Muy Alto","Alto","Medio","Bajo", "Muy Bajo", "N/D"))
+
+# Utilizamos la función en las variables especificadas.
+lapply(mapaFactor[,c("GRANIZO", "TOM_ELEC", "PRECIPITAC", "INUNDACION", "TEM_MAX", "TEM_MIN", "NEVADA", "SUS_LADERA", "VUL_SOCIAL", "VUL_SOC_FR", "SISMO")], levels)
+mapaFactor[,c("GRANIZO", "TOM_ELEC", "PRECIPITAC", "INUNDACION", "TEM_MAX", "TEM_MIN", "NEVADA", "SUS_LADERA", "VUL_SOCIAL", "VUL_SOC_FR", "SISMO")] <- 
+  lapply(mapaFactor[,c("GRANIZO", "TOM_ELEC", "PRECIPITAC", "INUNDACION", "TEM_MAX", "TEM_MIN", "NEVADA", "SUS_LADERA", "VUL_SOCIAL", "VUL_SOC_FR", "SISMO")], intensidad)
+```
+
+## 3. Elaboración de los mapas. 
+
+Los mapas de peligro son elaborados utilizando la librería R-Leaflet. 
+
+### 3.1 Precipitación. 
+
+Las precipitaciones en exceso pueden ser un factor detonante de inundaciones; pueden venir acompañadas de granizo o generar escurrimientos que arrastren material aguas abajo, provocando daños al patrimonio público y particular. También pueden modificar la mecánica del suelo de las laderas y provocar derrumbes y deslaves. Para visualizar el peligro por precipitaciones intensas, el Atlas de riesgo de la Ciudad de México desarrolló una metodología para identificar que zonas a nivel AGEB presentan mayor peligro ante eventos de precipitación extraordinarios. 
+
+```{r }
+##########################
+# MAPA 1 - PRECIPITACION #
+##########################
+label = paste0("<b style = 'color: green;'>AGEB: ", mapaFactor$CVEGEO, "</b>", "<br>",  mapaFactor$ALCALDIA)
+
+paleta <- colorFactor("Blues", mapaFactor$PRECIPITAC, reverse = T)
+popup <- paste0(mapaFactor$PRECIPITAC)
+
+(map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+   addProviderTiles("CartoDB.Positron") %>% 
+   addPolygons(highlightOptions = highlightOptions(color = "white"),
+               color = "#444444", 
+               weight = 0.2, 
+               smoothFactor = 0.5, 
+               opacity = 1, 
+               popup = popup,
+               label = lapply(label, htmltools::HTML), 
+               fillOpacity = 0.8, 
+               fillColor = ~paleta(mapaFactor$PRECIPITAC) ) %>%    #
+   addPolygons(data = mapa_cdmx, 
+               color = "#444444",
+               weight = 4, 
+               opacity = 1,
+               fill = F
+               ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 2, 
+              opacity = 1,
+              fill = F
+              ) %>% 
+   #addScaleBar(position = "bottomright") %>%   
+   addLegend(position = "bottomright", 
+             pal = paleta, 
+             values = mapaFactor$PRECIPITAC,     #
+             title = "<div a style = 'color:red;'>Peligro:</div>Precipitacion", #
+             opacity = 1,
+             labFormat = labelFormat(suffix = " ")) %>%       #
+   norte(ancho = 40, posicion = "topright") %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250) ) 
+```
+
+### 3.2 Inundación. 
+
+Para la Ciudad de México, la SGIRPC elaboró un mapa de peligros por inundaciones que puede verse a nivel AGEB (fig.36). Este mapa se construyó en base al “Índice de Inundabilidad” de la CONAGUA, para un periodo de retorno de 5 años, el cuál toma en cuenta factores como el relieve, la cantidad de lluvia y tipo y uso de suelo, ponderando por porcentaje del área inundable del AGEB y emitiendo una clasificación a cada área de la ciudad en uno de los 5 niveles de peligro (SGIRPC, 2019a). Como puede verse en la figura, se mantienen las zonas de Alto y Muy Alto peligro en las alcaldías Iztapalapa, Coyoacán, G.A.M., Xochimilco, Atzcapotzalco, Cuauhtemoc, Benito Juárez y Venustiano Carranza, además de AGEBs que presentan peligro dentro de Tlapan, Milpa Alta y Magdalena Contreras que no podrían visualizarse a otro nivel de desagregación de la información. 
+
+```{r }
+##########################
+# MAPA 2 - INUNDACION #
+##########################
+
+paleta <- colorFactor("Blues", mapaFactor$INUNDACION, reverse = T)
+( map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$INUNDACION) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 4, 
+              opacity = 1,
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 2, 
+              opacity = 1,
+              fill = F
+  ) %>% 
+  # addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomright", 
+            pal = paleta, 
+            values = mapaFactor$INUNDACION,     #
+            title = "<div a style = 'color:red;'>Peligro:</div>Inundación", #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright") %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250) )
+
+```
+
+### 3.3 Tormentas Eléctricas. 
+
+Las tormentas eléctricas son tormentas en las cuales se producen descargas electrostáticas de manera brusca formadas por las cargas positivas y negativas acumuladas entre nubes y tierra (SMN, 2019). Las descargas suelen ser entre nube y nube o entre nube y tierra siendo estas últimas las más peligrosas para los seres vivos en la superficie. 
+
+El cálculo del peligro por tormentas eléctricas por parte de la SGIRPC de la Ciudad de México consiste en elaborar mapas de la ocurrencia anual de tormentas eléctricas de la Ciudad de México, y asignar a cada AGEB una zona de peligro en base a estos eventos futuros.
+
+```{r }
+##########################
+# MAPA 3 - TORM_ELEC     #
+##########################
+#c("#ffff00", "#ffff38", "#ffff70", "#ffffc4", "#ffffff")
+paleta <- colorFactor(c("#ffffff", "#fff58c",  "#f99500"), mapaFactor$TOM_ELEC, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+             label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$TOM_ELEC) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$TOM_ELEC,     #
+            title = "<div a style = 'color:red;'>Peligro:</div> Tormenta Eléctrica",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+```
+
+### 3.4 Granizo
+
+El granizo es un tipo de precipitación sólida que se caracteriza por la caída de bolas de hielo de formas irregulares. El servicio meteorológico nacional define a las tormentas de granizo como “precipitación de glóbulos de hielo cuyo diámetro es del orden de 5 a mayor de 5 mm” (SMN, 2019). Estos fenómenos ocurren en toda la superficie terrestre, ocurriendo con mayor frecuencia en las zonas sub-tropicales, debido a la mayor ocurrencia de tormentas convectivas que favorecen el desarrollo de cumulonumbos (SMN, 2019). Este fenómeno constituye un problema para la ciudadanía al generar daños mecánicos (golpes) sobre vehículos y techos; puede lastimar a peatones sin protección y puede dañar la vegetación y los cultivos de la región. 
+
+
+```{r }
+##########################
+# MAPA 4 - granizo #
+##########################
+paleta <- colorFactor("BuPu", mapaFactor$GRANIZO, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$GRANIZO) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$GRANIZO,     #
+            title = "<div a style = 'color:red;'>Peligro:</div> Granizo",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Desplegamos el mapa
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+### 3.5 Temperaturas Máximas
+
+Las altas temperaturas, pueden generar efectos adversos en las personas y seres vivos en un lugar determinado, tales como estrés por calor, quemaduras solares, sarpullidos, deshidratación o golpes de calor. Si las altas temperaturas se mantienen por encima de las temperaturas máximas promedio durante más de 5 días, ocurren las denominadas “ondas de calor”, las cuales agravan el efecto de la temperatura elevada sobre la población.
+
+En términos promedios, la Ciudad de México presenta temperaturas máximas mensuales promedio en un rango de entre 16 a 30 °C, siendo los meses de marzo a junio los meses donde se registran los periodos con mayor temperatura promedio (Atlas de Riesgos de la Ciudad de México, 2019). Observando la fig. 54 podemos ver que las zonas mas cálidas de la Ciudad de México son las que se encuentran en la parte norte, principalmente en las alcaldías Gustavo A. Madero, Venustiano Carranza, Iztacalco, Iztapalapa y Tláhuac, presentando zonas de acumulación de calor, principalmente en el mes de mayo.
+
+En términos de peligro, la ciudad de México, a través de la SGIRPC elaboró un mapa de peligro a nivel AGEB en el que muestran las zonas donde hay mayor probabilidad de ocurrencia de eventos de temperaturas máximas y sus efectos nocivos sobre la salud de la población. La metodología utilizada para la realización de estos mapas fue similar a la utilizada para la obtención del mapa de peligros a nivel AGEB de peligro por lluvias extremas y el mapa de peligro por Temperaturas Mínimas (SGIRPC, 2019). 
+
+```{r }
+##########################
+# MAPA 5 - temMax #
+##########################
+paleta <- colorFactor("YlOrRd", mapaFactor$TEM_MAX, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$TEM_MAX) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$TEM_MAX,     #
+            title = "<div a style = 'color:red;'>Peligro:</div>Temperaturas Máximas",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Desplegamos el mapa
+map%>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+### 3.6 Temperaturas Mínimas
+
+Las bajas temperaturas constituyen un riesgo para la población. Afectan a la actividad económica al impedir la movilización de las personas que prefieren estar en casa, ponen en riesgo a la población vulnerable (niños, ancianos, personas con enfermedades crónicas), propician enfermedades respiratorias y provocan el aumento de energía dentro de los hogares y establecimientos comerciales y de oficinas. 
+
+En términos promedio, la Ciudad de México presenta temperaturas mínimas que van desde los 0 hasta los 14 °C (Atlas de Riesgos de la CDMX, 2019), siendo los meses de invierno (de diciembre a principios de marzo) los meses con las temperaturas mínimas más bajas. Las regiones más frías son las partes altas de Tlalpan, Cuajimalpa y Álvaro Obregón.
+
+El Atlas de Riesgo de la Ciudad de México realizó la determinación del grado de peligro por Temperatura Mínima para la Ciudad de México, a nivel AGEB. El cálculo del nivel de peligro se realizó con una metodología similar a la utilizada para calcular el peligro por lluvias extremas (SGIRPC, 2019), consistente en obtener información de las estaciones meteorológicas locales y obtener las coordenadas donde, a mayor probabilidad, ocurran las temperaturas más extremas.
+
+```{r }
+##########################
+# MAPA 6 - temMin #
+##########################
+paleta <- colorFactor("BuPu", mapaFactor$TEM_MIN, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$TEM_MIN) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$TEM_MIN,     #
+            title = "Peligro:<br> Temperaturas Mínimas",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Desplegamos mapa
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+
+### 3.7 Inestabilidad de laderas
+
+El nivel de peligro se construyó en base al mapa de laderas con el que cuenta el Atlas de la Ciudad de México, el cual, a una resolución de 15 m considera coo regiones libres de inestabilidad aquellas con pendientes de entre 0 a 6°. 
+
+```{r}
+##########################
+# MAPA 7- SUS_LADERA #
+##########################
+paleta <- colorFactor(c("#296335", "#ffffff"), mapaFactor$SUS_LADERA, reverse = F) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$SUS_LADERA) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$SUS_LADERA,     #
+            title = "Peligro:<br> Susceptibilidad de Laderas",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Desplegar mapa
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+### 3.8 Vulnerabilidad Social
+
+Dato obtenido del Atlas de Riesgos de la Ciudad de México. 
+
+```{r}
+##########################
+# MAPA 8 - VUL_SOCIAL #
+##########################
+paleta <- colorFactor(c("gray", wesanderson::wes_palettes$Zissou1), mapaFactor$VUL_SOCIAL, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$VUL_SOCIAL) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$VUL_SOCIAL,     #
+            title = "Vulnerabilidad Social",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Despliegue de mapa
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+### 3.9 Vulnerabilidad Social al fracturamiento. 
+
+Dato obtenido del Atlas de Riesgos de la Ciudad de México. 
+
+```{r}
+##########################
+# MAPA 5 - Vul_soc_fr #
+##########################
+paleta <- colorFactor(c("gray", wesanderson::wes_palettes$Zissou1), mapaFactor$VUL_SOCIAL, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$VUL_SOC_FR) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$VUL_SOC_FR,     #
+            title = "Vulnerabilidad Social <br>por Fracturas",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Desplegar Mapa
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+
+### 3.10 Sismos
+
+La ciudad de México es muy vulnerable a los sismos que se generan principalmente en la zona de subducción mexicana, en donde las placas tectónicas de Rivera y Cocos se sumergen debajo de la placa de Norteamérica, en las costas del Pacífico desde Nayarit hasta Chiapas El Valle de México ha sufrido daños severos a causa de sismos que se han producido a más de 300 km de distancia, lo cual probablemente se deba a una combinación de frecuencias y condiciones geológicas y estructurales del suelo local que amplifican y prolongan los sismos en las áreas centrales del Valle (Quintanar et al, 2018). El sismo de Michoacán del 19 de septiembre de 1985 (M8.1), el más destructivo, sucedió a más de 350 km, en las costas de Michoacán, y, sin embargo, registró aceleraciones máximas en la Ciudad de México del mismo orden que las registradas en la zona del epicentro. 
+
+La aceleración del suelo (cm/s2) es el resultado de la magnitud del sismo, pero también de su ubicación y de la profundidad del epicentro. De acuerdo con el Servicio Geológico Mexicano (SGM), el Valle de México se encuentra en una zona sísmica de peligrosidad y frecuencia media que registra sismos que no provocan aceleraciones en el suelo superiores al 70% de la aceleración de la gravedad (g) (686 cm/s2), aunque es vulnerable a los sismos de la zona de la costa, que es la más activa y registra sismos que sobrepasan los 0.7g (SGM, 2017). Sin embargo, como se verá más adelante, el rol de los sismos locales es mucho más importante por el peligro particular que representan. El mapa de la Figura 3 muestra la zonificación geotécnica del suelo del Valle de México que se caracteriza por tres fases:
+
+1.	Zona I de roca dura o lomas conformada por lava basáltica, arena y piedra pómez con gran cantidad de grava;
+
+2.	Zona II de transición compuesta de depósitos sedimentarios sobre capas arcillosas y depósitos aluviales; y
+
+3.	Zona III lacustre constituida principalmente por limos y arcillas muy suaves y compresibles de baja permeabilidad.
+
+En base a esta Zonificación Geotécnica está elaborado el mapa de peligros a nivel AGEB de la Ciudad de México, el cuál nos muestra el grado de peligro ante este fenómeno natural. 
+
+```{r}
+##########################
+# MAPA 5 - SISMO  #
+##########################
+paleta <- colorFactor(c(wesanderson::wes_palettes$Zissou1[1:2], "#ffffbc", wesanderson::wes_palettes$Zissou1[4:5]) , mapaFactor$SISMO, reverse = T) #
+map <- leaflet(mapaFactor, options = leafletOptions(zoomControl = FALSE)) %>%    #
+  addProviderTiles("CartoDB.Positron") %>% 
+  addPolygons(highlightOptions = highlightOptions(color = "white"),
+              color = "#444444", 
+              weight = 0.2, 
+              smoothFactor = 0.5, 
+              opacity = 1, 
+              label = lapply(label, htmltools::HTML), 
+              fillOpacity = 0.8, 
+              fillColor = ~paleta(mapaFactor$SISMO) ) %>%    #
+  addPolygons(data = mapa_cdmx, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addPolygons(data = mapa_municipios, 
+              color = "#444444",
+              weight = 1, 
+              fill = F
+  ) %>% 
+  addScaleBar(position = "bottomright") %>%   
+  addLegend(position = "bottomleft", 
+            pal = paleta, 
+            values = mapaFactor$SISMO,     #
+            title = "Peligro:<br> Sismos",       #
+            opacity = 1,
+            labFormat = labelFormat(suffix = " ")) %>%       #
+  norte(ancho = 40, posicion = "topright")
+
+# Desplegar Mapa
+map %>% 
+    leaflet.extras::suspendScroll(wakeMessage = "Haga click o mantenga el cursor sobre el mapa", wakeTime = 1250)
+
+```
+
+### Fuentes de información
+
+* **SGIRP. (2019). Atlas de riesgos de la Ciudad de México. Sección de Descarga de Datos. Accesible en http://www.atlas.cdmx.gob.mx. Secretaría de Gestión Integral del Riesgo y Protección Civil, CDMX.**
+
+* **SGIRPC. (2019a). Indicadores de Peligro a Nivel AGEB. Secretaría de Gestion Integral de Riesgo y Protección Civil de la Ciudad de México, Subdirección de Fenómenos Naturales y Antropogénicos. Ciudad de México. Febrero, 2019. Acceso al documento mediante la Solicitud de Información INFOMEX DF – 0107500031919, disponible en http://www.infomexdf.org.mx/InfomexDF/consulta.html.**
+
+* **SMN (2019). Glosario Técnico. Servicio Meteorológico Nacional. Comisión Nacional del Agua. México. Consultado en https://smn.cna.gob.mx/es/smn/glosario.**
+
+
